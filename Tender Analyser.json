@@ -1,0 +1,537 @@
+{
+  "name": "Tender Analyser",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const text = ($input.first().json.text || '').replace(/\\s+\\n/g, '\\n').trim();\nconst MAX = 60000; // characters\nreturn [{ json: {\n  tender_text: text.slice(0, MAX),\n  truncated: text.length > MAX,\n  total_chars: text.length\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        -16
+      ],
+      "id": "8534c8ea-ab91-4921-93b8-0c5cab66d3ce",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": "ministral-14b-latest",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        208
+      ],
+      "id": "064e902a-5087-45cc-b7a5-fa7e960d734e",
+      "name": "Mistral Cloud Chat Model",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "8c5Ug3qI2MJ6FytI",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"title\": \"\",\n  \"department\": \"\",\n  \"estimated_value_inr\": null,\n  \"emd_inr\": null,\n  \"submission_deadline\": null,\n  \"submission_deadline_quote\": \"\",\n  \"eligibility\": [\n    {\n      \"clause_ref\": \"\",\n      \"type\": \"turnover\",\n      \"requirement\": \"\",\n      \"numeric_value\": null,\n      \"source_quote\": \"\"\n    }\n  ],\n  \"required_documents\": [\"\"],\n  \"exemptions\": [\"\"]\n}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1168,
+        208
+      ],
+      "id": "a51b4fd2-e4d2-419d-a9d7-0cd329e7a959",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2c3c5062-36ca-4851-a920-14ef82c59d80",
+              "name": "profile",
+              "value": "{   \"name\": \"Sample Infra Pvt Ltd\",   \"annual_turnover_inr_last_3_years\": [12000000, 15000000, 18000000],   \"years_in_business\": 6,   \"is_msme\": true,   \"certifications\": [\"ISO 9001\", \"GST registered\", \"PAN\", \"EPF registration\"],   \"past_projects\": [     {\"name\": \"School building, Dept of Education\", \"value_inr\": 8000000, \"year\": 2024},     {\"name\": \"Road repair, PWD\", \"value_inr\": 5000000, \"year\": 2023}   ],   \"categories\": [\"civil works\", \"building maintenance\"],   \"documents_on_file\": [\"GST certificate\", \"PAN card\", \"ISO 9001 certificate\", \"ITR 3 years\"] }",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1536,
+        -16
+      ],
+      "id": "bb0bc1c4-e014-4d23-97f6-c8bc0621cda3",
+      "name": "Company Profile"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You decide whether a small company should bid on a government tender.\n\nTENDER DATA:\n{{ JSON.stringify($('Extract Fields').first().json.output) }}\n\nCOMPANY PROFILE:\n{{ JSON.stringify($json.profile) }}\n\nRules:\n- Evaluate every eligibility clause separately. status is one of: met, not_met, unknown.\n- Use \"unknown\" when the profile lacks the data. Do not assume.\n- If an MSME or startup exemption applies and the company qualifies, say so in the reason.\n- verdict is BID only if no clause is not_met and few are unknown. NO-BID if any mandatory clause is not_met. REVIEW if the result depends on unknowns.\n- score is 0-100, and must match the verdict.\n- missing_documents: documents the tender requires that are not in documents_on_file.\n- Keep each reason to one sentence and cite the numbers.",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1760,
+        -16
+      ],
+      "id": "72fe1542-a4ea-4506-b1bf-3cae6527bcf2",
+      "name": "Basic LLM Chain1"
+    },
+    {
+      "parameters": {
+        "model": "ministral-14b-latest",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        1776,
+        208
+      ],
+      "id": "e0f20909-59b7-4164-88f6-c52c6bfa8873",
+      "name": "Mistral Cloud Chat Model1",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "8c5Ug3qI2MJ6FytI",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"verdict\": \"BID\",\n  \"score\": 0,\n  \"summary\": \"\",\n  \"clause_results\": [\n    {\"clause_ref\": \"\", \"requirement\": \"\", \"status\": \"met\", \"reason\": \"\"}\n  ],\n  \"missing_documents\": [\"\"],\n  \"risks\": [\"\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1904,
+        208
+      ],
+      "id": "70a43147-372f-465a-bc87-0b420147511c",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You extract structured data from an Indian government tender document.\n\nRules:\n- Return only data that is stated in the document. If something is not stated, use null. Never guess.\n- Dates must be ISO format in IST.\n- For every eligibility clause, copy the exact sentence into source_quote and give the clause number in clause_ref.\n- type must be one of: turnover, experience, certification, registration, financial, other.\n- Put amounts in rupees as plain numbers (convert lakh and crore).\n- List MSME or Startup relaxations under exemptions.\n\nDOCUMENT:\n{{ $json.tender_text }}",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1072,
+        -16
+      ],
+      "id": "c66f11bf-f594-43e3-8f46-31d7c5b82712",
+      "name": "Extract Fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json.output;\nconst t = $('Extract Fields').first().json.output;\n\nconst icon = { 'BID': '✅', 'NO-BID': '❌', 'REVIEW': '⚠️' }[r.verdict] || '❔';\nconst mark = { met: '✔', not_met: '✘', unknown: '?' };\n\nconst clauses = (r.clause_results || [])\n  .map(c => `${mark[c.status] || '?'} ${c.clause_ref || ''} ${c.reason}`)\n  .join('\\n');\nconst missing = (r.missing_documents || []).map(d => `• ${d}`).join('\\n') || 'None';\n\nlet msg = `${icon} ${r.verdict} (${r.score}/100)\\n${t.title || 'Tender'}\\n` +\n  `Deadline: ${t.submission_deadline || 'not found'}\\n\\n` +\n  `${r.summary}\\n\\nClauses:\\n${clauses}\\n\\nMissing documents:\\n${missing}`;\n\nif (msg.length > 3900) msg = msg.slice(0, 3900) + '…';\nreturn [{ json: { message: msg } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2112,
+        -16
+      ],
+      "id": "05f8f004-60a5-4312-b727-2e9fc7845e61",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "chatId": "1411150017",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2336,
+        -16
+      ],
+      "id": "ec80d49a-016d-434f-ac33-a283add88f0a",
+      "name": "Send a text message",
+      "webhookId": "7a82de74-5ad7-4696-a236-463aca074de8",
+      "credentials": {
+        "telegramApi": {
+          "id": "1eMw339ss1ClFEsZ",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "ministral-14b-latest",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        1248,
+        416
+      ],
+      "id": "e5fb9590-2ce6-4cf6-9349-3400bf79a53b",
+      "name": "Mistral Cloud Chat Model2",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "8c5Ug3qI2MJ6FytI",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "tender_key"
+            },
+            {
+              "name": "title"
+            },
+            {
+              "name": "ref"
+            },
+            {
+              "name": "closing_ist"
+            },
+            {
+              "name": "link"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        -16
+      ],
+      "id": "b8a6b2ff-c36d-4d55-b819-7b8cad946d12",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "formTitle": "Submit PDF",
+        "formDescription": "Submit pdf",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Submit tender pdf",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        368,
+        224
+      ],
+      "id": "a98a5573-4774-4e9d-9578-f7140b202ef7",
+      "name": "On form submission",
+      "webhookId": "4ed69c36-e41e-4acf-ade7-0b922275d80b"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "={{ $json['Submit tender pdf'][0] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        592,
+        -16
+      ],
+      "id": "7c12c826-c708-4084-ae4c-6bf1217fbb58",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.link }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "Submit_tender_pdf"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        144,
+        -16
+      ],
+      "id": "04849cd1-42bc-4d37-9f8d-70f8fa92e678",
+      "name": "HTTP Request",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1f98f619-2b1c-497e-beb1-043b59d1e950",
+              "leftValue": "={{ $binary.tender_pdf ? $binary.tender_pdf.mimeType : '' }}",
+              "rightValue": "pdf",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        368,
+        -16
+      ],
+      "id": "328da308-4ede-47ae-bb8a-1f0e943876d4",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "1411150017",
+        "text": "=🆕 New tender: {{ $('When Executed by Another Workflow').first().json.title }} Ref: {{ $('When Executed by Another Workflow').first().json.ref }} Closes: {{ $('When Executed by Another Workflow').first().json.closing_ist }} Couldn't fetch the document automatically. Upload the PDF to the analyzer form for a verdict.",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        176
+      ],
+      "id": "e32a4bad-13a3-49a3-a5e3-137011ce9a2a",
+      "name": "Send a text message1",
+      "webhookId": "0cdf9025-05dc-4a07-a8fc-ac6c61e32605",
+      "credentials": {
+        "telegramApi": {
+          "id": "1eMw339ss1ClFEsZ",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Extract Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Extract Fields",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Extract Fields",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Company Profile": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Fields": {
+      "main": [
+        [
+          {
+            "node": "Company Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ddb8ecd9-379e-4cac-aae7-aad054d00cd2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6dd08a9a8af955d6dbd761309e1250ee5eb5bb3fc7968e40e39cd3577ad131ac"
+  },
+  "nodeGroups": [],
+  "id": "C0NUAOQnXNTbJ8Tg",
+  "tags": []
+}

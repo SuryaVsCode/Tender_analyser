@@ -1,0 +1,1162 @@
+{
+  "name": "Scraper Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        432
+      ],
+      "id": "ff2711c1-f0e5-4a59-8986-71068a862df5",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://eprocure.gov.in/eprocure/app?service=restart",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        432
+      ],
+      "id": "ac9a8843-480b-4715-8506-55e5e4fcb8da",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "rows",
+              "cssSelector": "#activeTenders tr",
+              "returnValue": "html",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        144
+      ],
+      "id": "9a1b0f16-9a2d-431d-a2ef-c41b6aa68731",
+      "name": "HTML"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "rows",
+              "cssSelector": "#activeCorrigendums tr",
+              "returnValue": "html",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        720
+      ],
+      "id": "920e657c-a50c-494e-8993-3f0b5ea29110",
+      "name": "HTML1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = 'https://eprocure.gov.in';\nconst strip = s => (s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/\\s+/g, ' ').trim();\nconst parse = s => {\n  const d = DateTime.fromFormat((s || '').trim(), 'dd-LLL-yyyy hh:mm a',\n    { zone: 'Asia/Kolkata', locale: 'en' });\n  return d.isValid ? d.toISO() : null;\n};\n\n// Collect every row HTML string, whether rows is a string or an array\nconst rowHtmls = [];\nfor (const item of $input.all()) {\n  const r = item.json.rows;\n  if (Array.isArray(r)) r.forEach(x => rowHtmls.push(String(x)));\n  else if (r) rowHtmls.push(String(r));\n}\n\nconst out = [];\nfor (const html of rowHtmls) {\n  const cells = [];\n  const re = /<td[^>]*>([\\s\\S]*?)<\\/td>/g;\n  let m;\n  while ((m = re.exec(html)) !== null) cells.push(m[1]);\n  if (cells.length < 4) continue; // skip header or empty rows\n\n  const hrefMatch = cells[0].match(/href=\"([^\"]+)\"/);\n  const title = strip(cells[0]).replace(/^\\d+\\.\\s*/, '');\n  const ref = strip(cells[1]);\n  const closing = parse(strip(cells[2]));\n  const opening = parse(strip(cells[3]));\n\n  const problems = [];\n  if (!ref) problems.push('missing_ref');\n  if (!closing) problems.push('bad_closing_date');\n  if (!opening) problems.push('bad_opening_date');\n  if (closing && opening && opening < closing) problems.push('opening_before_closing');\n\n  out.push({ json: {\n    tender_key: `${ref}|${title.toLowerCase().slice(0, 60)}`,\n    ref, title,\n    closing_ist: closing,\n    opening_ist: opening,\n    link: hrefMatch ? base + hrefMatch[1].replace(/&amp;/g, '&') : null,\n    confidence: problems.length ? 'needs_review' : 'high',\n    problems,\n    scraped_at: $now.toISO()\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        720
+      ],
+      "id": "369d56a4-58a1-45ca-939e-fae8fe0b5134",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9NIFMQggomOlzvZb",
+          "mode": "list",
+          "cachedResultName": "tenders",
+          "cachedResultUrl": "/projects/7XBVvAj8Czyr0RFD/datatables/9NIFMQggomOlzvZb"
+        },
+        "filters": {
+          "conditions": []
+        },
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        144
+      ],
+      "id": "9cacd425-2bf6-43b3-8fe2-c3141b914cbe",
+      "name": "Get row(s)",
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const scraped = $('Code').all().map(i => i.json);\nconst existing = $input.all().map(i => i.json).filter(r => r.tender_key);\nconst byKey = new Map(existing.map(r => [r.tender_key, r]));\n\nreturn scraped.map(s => {\n  const old = byKey.get(s.tender_key);\n  let status = 'new';\n  if (old) {\n  const a = new Date(old.closing_ist).getTime();\n  const b = new Date(s.closing_ist).getTime();\n  status = (isNaN(a) || a !== b) ? 'changed' : 'unchanged';\n}\n  return { json: {\n    ...s,\n    status,\n    old_closing: old ? old.closing_ist : null,\n    row_id: old ? old.id : null\n  }};\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        144
+      ],
+      "id": "91495290-a503-4773-b31c-cbe25ce98f3a",
+      "name": "Compare"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = 'https://eprocure.gov.in';\nconst strip = s => (s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/\\s+/g, ' ').trim();\nconst parse = s => {\n  const d = DateTime.fromFormat((s || '').trim(), 'dd-LLL-yyyy hh:mm a',\n    { zone: 'Asia/Kolkata', locale: 'en' });\n  return d.isValid ? d.toISO() : null;\n};\n\n// Collect every row HTML string, whether rows is a string or an array\nconst rowHtmls = [];\nfor (const item of $input.all()) {\n  const r = item.json.rows;\n  if (Array.isArray(r)) r.forEach(x => rowHtmls.push(String(x)));\n  else if (r) rowHtmls.push(String(r));\n}\n\nconst out = [];\nfor (const html of rowHtmls) {\n  const cells = [];\n  const re = /<td[^>]*>([\\s\\S]*?)<\\/td>/g;\n  let m;\n  while ((m = re.exec(html)) !== null) cells.push(m[1]);\n  if (cells.length < 4) continue; // skip header or empty rows\n\n  const hrefMatch = cells[0].match(/href=\"([^\"]+)\"/);\n  const title = strip(cells[0]).replace(/^\\d+\\.\\s*/, '');\n  const ref = strip(cells[1]);\n  const closing = parse(strip(cells[2]));\n  const opening = parse(strip(cells[3]));\n\n  const problems = [];\n  if (!ref) problems.push('missing_ref');\n  if (!closing) problems.push('bad_closing_date');\n  if (!opening) problems.push('bad_opening_date');\n  if (closing && opening && opening < closing) problems.push('opening_before_closing');\n\n  out.push({ json: {\n    tender_key: `${ref}|${title.toLowerCase().slice(0, 60)}`,\n    ref, title,\n    closing_ist: closing,\n    opening_ist: opening,\n    link: hrefMatch ? base + hrefMatch[1].replace(/&amp;/g, '&') : null,\n    confidence: problems.length ? 'needs_review' : 'high',\n    problems,\n    scraped_at: $now.toISO()\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        144
+      ],
+      "id": "334074e3-e6a5-4e25-83ee-47e777efa8c2",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "new",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "316f2ae6-46d6-492f-bef1-f2c73bec8eda"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "07d7c9e4-fbd5-4369-85ff-9733a27e5371",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "changed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "9a1fdbcc-ea8f-4062-a79c-8946ebaa10ce",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "=unchanged",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1344,
+        128
+      ],
+      "id": "1dcdfc5d-c7ac-4b3d-b107-9472e663ac7a",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "9NIFMQggomOlzvZb",
+          "mode": "list",
+          "cachedResultName": "tenders",
+          "cachedResultUrl": "/projects/7XBVvAj8Czyr0RFD/datatables/9NIFMQggomOlzvZb"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ref": "={{ $json.ref }}",
+            "tender_key": "={{ $json.tender_key }}",
+            "title": "={{ $json.title }}",
+            "closing_ist": "={{ $json.closing_ist }}",
+            "opening_ist": "={{ $json.opening_ist }}",
+            "link": "={{ $json.link }}",
+            "first_seen": "={{ $now.toISO() }}",
+            "last_checked": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tender_key",
+              "displayName": "tender_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "closing_ist",
+              "displayName": "closing_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "opening_ist",
+              "displayName": "opening_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "last_checked",
+              "displayName": "last_checked",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        720
+      ],
+      "id": "6b6b08b2-5d26-4d18-9fd5-a532c30a0c6e",
+      "name": "Insert row"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9NIFMQggomOlzvZb",
+          "mode": "list",
+          "cachedResultName": "tenders",
+          "cachedResultUrl": "/projects/7XBVvAj8Czyr0RFD/datatables/9NIFMQggomOlzvZb"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "={{ $json.row_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "closing_ist": "={{ $json.closing_ist }}",
+            "opening_ist": "={{ $json.opening_ist }}",
+            "last_checked": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tender_key",
+              "displayName": "tender_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "closing_ist",
+              "displayName": "closing_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "opening_ist",
+              "displayName": "opening_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "last_checked",
+              "displayName": "last_checked",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        144
+      ],
+      "id": "66b870dc-970f-43a8-87ca-2633a7731cc4",
+      "name": "Update row(s)"
+    },
+    {
+      "parameters": {
+        "chatId": "1411150017",
+        "text": "=🆕 New tender {{ $json.title }} Ref: {{ $json.ref }} Closes: {{ $json.closing_ist }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1792,
+        144
+      ],
+      "id": "b12a1a91-cd63-4f84-ae0a-bb5d65e998fb",
+      "name": "Send a text message",
+      "webhookId": "60402fef-fcab-4d19-b856-226caaf02cb1",
+      "credentials": {
+        "telegramApi": {
+          "id": "1eMw339ss1ClFEsZ",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "1411150017",
+        "text": "=⚠️ Deadline changed {{ $json.title }} Ref: {{ $json.ref }} Old: {{ $json.old_closing }} New: {{ $json.closing_ist }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1568,
+        336
+      ],
+      "id": "23f4a61a-a4d4-48a9-8bd9-4dc65cf0fdda",
+      "name": "Send a text message1",
+      "webhookId": "60402fef-fcab-4d19-b856-226caaf02cb1",
+      "credentials": {
+        "telegramApi": {
+          "id": "1eMw339ss1ClFEsZ",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "C0NUAOQnXNTbJ8Tg",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/C0NUAOQnXNTbJ8Tg",
+          "cachedResultName": "Tender Analyser"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tender_key": "={{ $json.tender_key }}",
+            "title": "={{ $json.title }}",
+            "ref": "={{ $json.ref }}",
+            "closing_ist": "={{ $json.closing_ist }}",
+            "link": "={{ $json.link }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tender_key",
+              "displayName": "tender_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "closing_ist",
+              "displayName": "closing_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1792,
+        -144
+      ],
+      "id": "737def2f-46ce-403c-bfc2-733d779c6950",
+      "name": "Call 'Tender Analyser'"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        -48
+      ],
+      "id": "aa2a59c1-cffb-42c4-8d71-d6612693519b",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9NIFMQggomOlzvZb",
+          "mode": "list",
+          "cachedResultName": "tenders",
+          "cachedResultUrl": "/projects/7XBVvAj8Czyr0RFD/datatables/9NIFMQggomOlzvZb"
+        },
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        720
+      ],
+      "id": "6251bb35-fe03-41c4-ba8b-a6200625f1cf",
+      "name": "Get row(s)1",
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const corr = $('Code in JavaScript1').all().map(i => i.json);\nconst stored = $input.all().map(i => i.json).filter(r => r.tender_key);\n\nconst byRef = new Map();\nfor (const r of stored) {\n  const k = (r.ref || '').trim().toLowerCase();\n  if (!byRef.has(k)) byRef.set(k, []);\n  byRef.get(k).push(r);\n}\n\nreturn corr.map(c => {\n  const matches = byRef.get((c.ref || '').trim().toLowerCase()) || [];\n  let status = 'not_tracked';\n  let row = null;\n  if (matches.length > 1) status = 'ambiguous';\n  else if (matches.length === 1) {\n    row = matches[0];\n    const a = new Date(row.closing_ist).getTime();\n    const b = new Date(c.closing_ist).getTime();\n    status = (a !== b) ? 'date_extension' : 'no_date_change';\n  }\n  return { json: {\n    corrigendum_title: c.title,\n    ref: c.ref,\n    new_closing: c.closing_ist,\n    new_opening: c.opening_ist,\n    old_closing: row ? row.closing_ist : null,\n    tender_title: row ? row.title : null,\n    row_id: row ? row.id : null,\n    status\n  }};\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        720
+      ],
+      "id": "0de5a274-44f9-46d3-aa28-f1a400182472",
+      "name": "Match Corrigendum"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9c1dc2da-0898-418b-8dcd-d94e6e194324",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "date_extension",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        1344,
+        720
+      ],
+      "id": "d5e6f37d-641b-4611-98bf-7839c2c46b07",
+      "name": "Filter"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9NIFMQggomOlzvZb",
+          "mode": "list",
+          "cachedResultName": "tenders",
+          "cachedResultUrl": "/projects/7XBVvAj8Czyr0RFD/datatables/9NIFMQggomOlzvZb"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "={{ $json.row_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tender_key": "=",
+            "ref": "=",
+            "title": "=",
+            "closing_ist": "={{ $json.new_closing }}",
+            "opening_ist": "={{ $json.new_opening }}",
+            "link": "=",
+            "last_checked": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tender_key",
+              "displayName": "tender_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "closing_ist",
+              "displayName": "closing_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "opening_ist",
+              "displayName": "opening_ist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "last_checked",
+              "displayName": "last_checked",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        912
+      ],
+      "id": "e6a1d90f-7b96-46b8-abb1-6e6de86d1933",
+      "name": "Update row(s)1"
+    },
+    {
+      "parameters": {
+        "chatId": "1411150017",
+        "text": "=     📝 Corrigendum: deadline extended      {{ $json.tender_title }}      Ref: {{ $json.ref }}      Old: {{ $json.old_closing }}      New: {{ $json.new_closing }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1792,
+        528
+      ],
+      "id": "20a137cb-5002-440b-b2c8-4d903344cdf3",
+      "name": "Send a text message2",
+      "webhookId": "f7552b0c-97f8-4590-a3bd-7c4edd7c1f2d",
+      "credentials": {
+        "telegramApi": {
+          "id": "1eMw339ss1ClFEsZ",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "rJGiDJ8vTMM6N0o6",
+          "mode": "list",
+          "cachedResultName": "change_log",
+          "cachedResultUrl": "/projects/7XBVvAj8Czyr0RFD/datatables/rJGiDJ8vTMM6N0o6"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tender_key": "={{ $json.row_id }}",
+            "ref": "={{ $json.ref }}",
+            "title": "={{ $json.tender_title }}",
+            "change_type": "date_extension",
+            "old_value": "={{ $json.old_closing }}",
+            "new_value": "={{ $json.new_closing }}",
+            "source": "corrigendum",
+            "detected_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tender_key",
+              "displayName": "tender_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "change_type",
+              "displayName": "change_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "old_value",
+              "displayName": "old_value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "new_value",
+              "displayName": "new_value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "detected_at",
+              "displayName": "detected_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        528
+      ],
+      "id": "d87557db-0c28-4472-a9bf-4293d4f8c2c7",
+      "name": "Insert row1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "HTML",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTML1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s)": {
+      "main": [
+        [
+          {
+            "node": "Compare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Get row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Update row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Tender Analyser'": {
+      "main": [
+        []
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Call 'Tender Analyser'",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Get row(s)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s)1": {
+      "main": [
+        [
+          {
+            "node": "Match Corrigendum",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Corrigendum": {
+      "main": [
+        [
+          {
+            "node": "Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter": {
+      "main": [
+        [
+          {
+            "node": "Update row(s)1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Insert row1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Insert row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update row(s)1": {
+      "main": [
+        []
+      ]
+    },
+    "Insert row1": {
+      "main": [
+        [
+          {
+            "node": "Send a text message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "51ddde04-c080-4298-af57-a5f4ef95a09f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6dd08a9a8af955d6dbd761309e1250ee5eb5bb3fc7968e40e39cd3577ad131ac"
+  },
+  "nodeGroups": [],
+  "id": "nDYv4OPohsE9nlTb",
+  "tags": []
+}
